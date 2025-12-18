@@ -1,1 +1,6 @@
 node_modules
+# http-mitm-proxy cert cache
+.http-mitm-proxy/
+certs/
+**/*.pem
+**/*.key
