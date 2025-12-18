@@ -1,0 +1,21 @@
+{
+  "name": "har-tool",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently -k -n server,client \"pnpm dev:server\" \"wait-on http://127.0.0.1:8787/health && pnpm dev:client\"",
+    "dev:client": "pnpm --filter @app/client dev",
+    "dev:server": "pnpm --filter @app/server dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.26.0",
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "wait-on": "^9.0.3"
+  }
+}
