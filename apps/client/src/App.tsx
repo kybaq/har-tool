@@ -34,7 +34,9 @@ export default function App() {
     null
   );
   const [selectedSessionId, setSelectedSessionId] = useState<string>("");
-  const [sessionName, setSessionName] = useState("");
+
+  const [routeKey, setRouteKey] = useState("");
+  const [report, setReport] = useState<any | null>(null);
 
   const [state, dispatch] = useReducer(reducer, {
     items: [],
@@ -56,19 +58,38 @@ export default function App() {
   }
 
   async function startSession() {
+    if (!routeKey.trim()) {
+      alert("routeKey를 입력해줘");
+      return;
+    }
+
     const r = await fetch("/api/sessions/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: sessionName || undefined }),
+      body: JSON.stringify({
+        name: routeKey,
+        routeKey,
+      }),
     });
+
     if (r.ok) {
-      setSessionName("");
+      setReport(null); // 이전 리포트 초기화
       await refreshSessions();
     }
   }
 
-  async function stopSession() {
-    await fetch("/api/sessions/stop", { method: "POST" });
+  async function stopAndSummarize() {
+    const r = await fetch("/api/sessions/stop", { method: "POST" });
+    const meta = await r.json();
+
+    if (meta?.id) {
+      const rr = await fetch(`/api/sessions/${meta.id}/report`, {
+        method: "POST",
+      });
+      const data = await rr.json();
+      setReport(data);
+    }
+
     await refreshSessions();
   }
 
@@ -79,9 +100,8 @@ export default function App() {
     setSelectedId(null);
   }
 
-  function downloadSession(format: "json" | "har") {
+  function downloadSession(format: "json" | "har" | "md") {
     if (!selectedSessionId) return;
-    // 다운로드 트리거
     window.location.href = `/api/sessions/${selectedSessionId}/export?format=${format}`;
   }
 
@@ -186,17 +206,17 @@ export default function App() {
           </span>
 
           <input
-            value={sessionName}
-            onChange={(e) => setSessionName(e.target.value)}
-            placeholder="session name"
-            style={{ width: 200, padding: "8px 10px" }}
+            value={routeKey}
+            onChange={(e) => setRouteKey(e.target.value)}
+            placeholder="route key (ex: /dashboard)"
+            style={{ width: 220, padding: "8px 10px" }}
           />
 
           <button onClick={startSession} disabled={Boolean(currentSession)}>
             start
           </button>
-          <button onClick={stopSession} disabled={!currentSession}>
-            stop
+          <button onClick={stopAndSummarize} disabled={!currentSession}>
+            stop & summarize
           </button>
 
           <select
@@ -218,18 +238,34 @@ export default function App() {
           </select>
 
           <button
+            onClick={() => {
+              window.location.href = "/api/catalog/export?format=md";
+            }}
+          >
+            export all session in md
+          </button>
+
+          <button
             disabled={!selectedSessionId}
             onClick={() => downloadSession("json")}
           >
-            export json
+            export selected session in json
           </button>
 
           <button
             disabled={!selectedSessionId}
             onClick={() => downloadSession("har")}
           >
-            export har
+            export selected session in har
           </button>
+
+          <button
+            disabled={!selectedSessionId}
+            onClick={() => downloadSession("md" as any)}
+          >
+            export selected session in md
+          </button>
+
         </div>
 
         <button onClick={onMock}>+ mock</button>
@@ -341,6 +377,34 @@ export default function App() {
               />
             </div>
           )}
+            {report && (
+    <div style={{ marginBottom: 16 }}>
+      <h3>Route: {report.routeKey}</h3>
+      <table width="100%" cellPadding={6}>
+        <thead>
+          <tr>
+            <th align="left">Method</th>
+            <th align="left">Host</th>
+            <th align="left">Path</th>
+            <th align="right">Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {report.endpoints.map((e: any) => (
+            <tr key={e.key}>
+              <td>{e.method}</td>
+              <td>{e.host}</td>
+              <td>
+                <code>{e.path}</code>
+              </td>
+              <td align="right">{e.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+
         </section>
       </main>
     </div>

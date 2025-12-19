@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import type { RequestLog } from "@pkg/shared";
+import type { RouteReport } from "./routeReport";
 
 export type SessionMeta = {
   id: string;
@@ -158,5 +159,22 @@ export class SessionStore {
       } catch {}
     }
     return items;
+  }
+
+  async readReport(id: string): Promise<RouteReport | null> {
+    const meta = await this.read(id);
+    if (!meta) return null;
+    try {
+      const txt = await fsp.readFile(path.join(meta.dir, "report.json"), "utf8");
+      return JSON.parse(txt);
+    } catch {
+      return null;
+    }
+  }
+
+  async writeReport(id: string, report: RouteReport): Promise<void> {
+    const meta = await this.read(id);
+    if (!meta) return;
+    await fsp.writeFile(path.join(meta.dir, "report.json"), JSON.stringify(report, null, 2), "utf8");
   }
 }

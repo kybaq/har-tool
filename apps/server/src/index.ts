@@ -7,6 +7,10 @@ import { startMitmProxy } from "./mitmProxy";
 import { sanitizeLog } from "./sanitize";
 import { SessionStore } from "./sessionStore";
 
+import { buildRouteReport } from "./routeReport";
+import { buildRouteCatalog } from "./catalog";
+import { catalogToMarkdown } from "./catalogMarkdown";
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
@@ -134,7 +138,19 @@ app.post("/api/sessions/start", async (req, res) => {
 
 app.post("/api/sessions/stop", async (_req, res) => {
   const meta = await sessionStore.stop();
-  res.json(meta ?? { ok: true, message: "no active session" });
+  if (!meta) return res.json({ ok: true, message: "no active session" });
+
+  // ✅ stop 시점에 report 생성해서 캐시 저장
+  try {
+    const logs = await sessionStore.readLogs(meta.id, 200000);
+    const routeKey = (meta as any).routeKey || meta.name || "/";
+    const report = buildRouteReport({ routeKey, sessionId: meta.id, logs });
+    await sessionStore.writeReport(meta.id, report);
+  } catch (e) {
+    console.error("[report] build on stop failed", e);
+  }
+
+  res.json(meta);
 });
 
 // 세션 정보 다운로드
@@ -172,8 +188,123 @@ app.get("/api/sessions/:id/export", async (req, res) => {
     return;
   }
 
+  if (format === "md" || format === "markdown") {
+    const cached = await sessionStore.readReport(id);
+    let report = cached;
+
+    if (!report) {
+      const logs = await sessionStore.readLogs(id, 200000);
+      const routeKey = (meta as any).routeKey || meta.name || "/";
+      report = buildRouteReport({ routeKey, sessionId: id, logs });
+      await sessionStore.writeReport(id, report);
+    }
+
+    const md = reportToMarkdown(report);
+
+    res.setHeader("content-type", "text/markdown; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="route-${id}.md"`);
+    res.end(md);
+    return;
+  }
+
+
   res.status(400).json({ error: "invalid format" });
 });
+
+app.get("/api/catalog/export", async (req, res) => {
+  const format = String(req.query.format ?? "md");
+
+  const catalog = await buildRouteCatalog({
+    listSessions: async () => {
+      const items = await sessionStore.list();
+      return items.map((x: any) => ({ id: x.id, name: x.name, routeKey: x.routeKey }));
+    },
+    readReport: (id) => sessionStore.readReport(id),
+    writeReport: (id, report) => sessionStore.writeReport(id, report),
+    readLogs: (id, limit) => sessionStore.readLogs(id, limit),
+  });
+
+  if (format === "json") {
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="route-catalog.json"`);
+    res.end(JSON.stringify(catalog, null, 2));
+    return;
+  }
+
+  const md = catalogToMarkdown(catalog);
+  res.setHeader("content-type", "text/markdown; charset=utf-8");
+  res.setHeader("content-disposition", `attachment; filename="route-catalog.md"`);
+  res.end(md);
+});
+
+app.post("/api/sessions/:id/report", async (req, res) => {
+  const id = req.params.id;
+  const meta = await sessionStore.read(id);
+  if (!meta) return res.status(404).json({ error: "session not found" });
+
+  // ✅ 캐시 있으면 바로 반환
+  const cached = await sessionStore.readReport(id);
+  if (cached) return res.json(cached);
+
+  // ✅ 없으면 생성 후 저장
+  const logs = await sessionStore.readLogs(id, 200000);
+  const routeKey = (meta as any).routeKey || meta.name || "/";
+  const report = buildRouteReport({ routeKey, sessionId: id, logs });
+  await sessionStore.writeReport(id, report);
+
+  res.json(report);
+});
+
+function sanitizeFilename(s: string) {
+  return String(s || "route")
+    .replace(/^\/+/, "")              // leading slashes
+    .replace(/[\/\\]/g, "_")          // path separators
+    .replace(/[^a-zA-Z0-9._-]/g, "_") // other unsafe chars
+    .slice(0, 80) || "route";
+}
+
+function reportToMarkdown(report: any) {
+  const lines: string[] = [];
+
+  lines.push(`# Route API Map`);
+  lines.push("");
+  lines.push(`- **Route**: \`${report.routeKey}\``);
+  lines.push(`- **Session**: \`${report.sessionId}\``);
+  lines.push(`- **Captured**: ${new Date(report.createdAt).toLocaleString()}`);
+  lines.push(`- **Total Logs**: ${report.totalLogs}`);
+  lines.push("");
+
+  lines.push("## Endpoints");
+  lines.push("");
+
+  // 표
+  lines.push(`| Method | Host | Path | Count | Statuses | Query Keys |`);
+  lines.push(`| --- | --- | --- | ---: | --- | --- |`);
+
+  for (const e of report.endpoints ?? []) {
+    const statuses = Object.entries(e.statuses ?? {})
+      .sort((a: any, b: any) => Number(b[1]) - Number(a[1]))
+      .slice(0, 6)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(" ");
+
+    const qk = (e.queryKeys ?? []).slice(0, 8).join(", ");
+    const qkCell = qk ? `\`${qk}\`` : "";
+
+    lines.push(
+      `| \`${e.method}\` | \`${e.host}\` | \`${e.path}\` | ${e.count} | ${statuses} | ${qkCell} |`
+    );
+  }
+
+  lines.push("");
+  lines.push("## Notes");
+  lines.push("");
+  lines.push("- Paths are normalized (e.g. numeric IDs → `:id`, UUIDs → `:uuid`).");
+  lines.push("- Query values are not stored; only key names are listed.");
+  lines.push("");
+
+  return lines.join("\n");
+}
 
 // --- HAR 변환 (MVP)
 function toHar(items: RequestLog[]) {

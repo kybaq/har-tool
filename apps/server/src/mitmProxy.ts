@@ -8,6 +8,22 @@ type PushLog = (log: RequestLog) => void;
 
 const BODY_LIMIT = 64 * 1024;
 
+// ✅ 자사 호스트만 캡처하도록 제한 (필요한 것만 남겨)
+const ALLOW_HOSTS = [
+  "api.dallalive.com",
+  "www.dallalive.com",
+  ".dallalive.com", // suffix 매칭(예: xxx.mycorp.internal)
+];
+
+function isAllowedHost(host: string) {
+  const h = host.toLowerCase();
+  // host에 포트가 붙어오는 경우 제거: "api.my.com:443"
+  const hostname = h.split(":")[0];
+  return ALLOW_HOSTS.some((x) =>
+    x.startsWith(".") ? hostname.endsWith(x) : hostname === x
+  );
+}
+
 function toRecord(headers: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!headers) return out;
@@ -34,10 +50,9 @@ export function startMitmProxy(opts: { port: number; pushLog: PushLog }) {
   const proxy = new Proxy();
 
   proxy.onError((ctx, err, kind) => {
-    if ((err as any)?.code === "EPIPE") {
-      // 브라우저가 먼저 연결을 닫은 정상적인 케이스
-      return;
-    }
+    const host = String(ctx?.clientToProxyRequest?.headers?.host ?? "");
+    if (!isAllowedHost(host)) return;             // ✅ 외부는 조용히
+    if ((err as any)?.code === "EPIPE") return;   // ✅ 브라우저가 끊은 흔한 노이즈
     console.error("[mitm] error", kind, err);
   });
 
@@ -53,6 +68,11 @@ export function startMitmProxy(opts: { port: number; pushLog: PushLog }) {
     const isTls = Boolean(ctx.isSSL);
     const protocol = isTls ? "https" : "http";
     const fullUrl = `${protocol}://${host}${req.url || ""}`;
+
+    // ✅ 자사 도메인이 아니면 캡처/저장 로직을 건너뜀 (통과만)
+    if (!isAllowedHost(host)) {
+      return callback();
+    }
 
     // 요청 body 캡처
     const reqChunks: Buffer[] = [];

@@ -4,3 +4,6 @@ node_modules
 certs/
 **/*.pem
 **/*.key
+
+# session 정보 숨김
+data/
